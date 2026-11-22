@@ -1,0 +1,10 @@
+report-generator-frontend/node_modules
+report-generator-frontend/dist
+report-generator-frontend/.env
+
+report-generator-backend/node_modules
+report-generator-backend/dist
+report-generator-backend/.env
+
+model
+
