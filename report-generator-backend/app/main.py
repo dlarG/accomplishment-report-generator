@@ -5,6 +5,12 @@ from pydantic import BaseModel
 from io import BytesIO
 from datetime import datetime
 import requests
+import sqlite3
+from pathlib import Path
+from uuid import uuid4
+import re
+
+from fastapi import UploadFile, File
 
 from docx import Document
 from docx.shared import Pt
@@ -23,6 +29,63 @@ app.add_middleware(
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "gemma3:1b"
 
+# Knowledge Base storage
+BASE_DIR = Path(__file__).resolve().parent.parent
+KB_DIR = BASE_DIR / "knowledge_base"
+UPLOAD_DIR = KB_DIR / "uploads"
+DB_PATH = KB_DIR / "knowledge.db"
+
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def initialize_knowledge_base():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                stored_filename TEXT NOT NULL,
+                extracted_text TEXT NOT NULL,
+                uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+
+initialize_knowledge_base()
+
+from docx import Document
+from io import BytesIO
+
+
+def extract_docx_text(file_bytes: bytes) -> str:
+    document = Document(BytesIO(file_bytes))
+    extracted_parts = []
+
+    # Extract normal paragraphs
+    for paragraph in document.paragraphs:
+        text = paragraph.text.strip()
+        if text:
+            extracted_parts.append(text)
+
+    # Extract table contents (important for accomplishment reports)
+    for table in document.tables:
+        for row in table.rows:
+            row_text = " | ".join(
+                cell.text.strip()
+                for cell in row.cells
+                if cell.text.strip()
+            )
+
+            if row_text:
+                extracted_parts.append(row_text)
+
+    return "\n".join(extracted_parts)
 
 class ReportRequest(BaseModel):
     text: str
@@ -37,9 +100,102 @@ def home():
 def health_check():
     return {"status": "online", "model": OLLAMA_MODEL}
 
+def retrieve_relevant_examples(query: str, limit: int = 5):
+    """
+    Retrieve historical accomplishment entries using keyword overlap.
+    """
+
+    stopwords = {
+        "the", "and", "for", "was", "were", "are", "is",
+        "this", "that", "with", "from", "into", "about",
+        "their", "them", "they", "then", "have", "has",
+        "had", "been", "being", "his", "her", "its",
+        "a", "an", "to", "of", "in", "on", "at", "by",
+        "as", "or", "but", "not", "we", "it", "he", "she",
+        "while", "during", "through", "after", "before"
+    }
+
+    def tokenize(text):
+        words = re.findall(r"[a-zA-Z0-9]+", text.lower())
+        return {
+            word for word in words
+            if len(word) > 2 and word not in stopwords
+        }
+
+    query_words = tokenize(query)
+
+    if not query_words:
+        return []
+
+    # Retrieve all stored reports
+    with get_db() as conn:
+        reports = conn.execute(
+            "SELECT filename, extracted_text FROM reports"
+        ).fetchall()
+
+    candidates = []
+
+    # Split reports into smaller entries instead of searching entire documents
+    for report in reports:
+        lines = report["extracted_text"].splitlines()
+
+        for line in lines:
+            line = line.strip()
+
+            if len(line) < 15:
+                continue
+
+            entry_words = tokenize(line)
+
+            if not entry_words:
+                continue
+
+            # Count shared keywords
+            matched_words = query_words.intersection(entry_words)
+            score = len(matched_words)
+
+            if score > 0:
+                candidates.append({
+                    "text": line,
+                    "source": report["filename"],
+                    "score": score
+                })
+
+    # Highest similarity score first
+    candidates.sort(key=lambda item: item["score"], reverse=True)
+
+    # Remove duplicate text
+    results = []
+    seen = set()
+
+    for candidate in candidates:
+        text = candidate["text"]
+
+        if text in seen:
+            continue
+
+        seen.add(text)
+        results.append(candidate)
+
+        if len(results) >= limit:
+            break
+
+    return results
 
 @app.post("/api/generate-docx")
 def generate_docx(request: ReportRequest):
+
+    # 1. Search our Knowledge Base for similar accomplishments
+    examples = retrieve_relevant_examples(request.text)
+
+    # 2. Convert retrieved examples into context text
+    if examples:
+        reference_text = "\n".join(
+            f"- {item['text']}"
+            for item in examples
+        )
+    else:
+        reference_text = "No relevant historical examples were found."
 
     if not request.text.strip():
         raise HTTPException(
@@ -49,73 +205,65 @@ def generate_docx(request: ReportRequest):
 
     # 1. Ask Ollama to improve the raw text
     prompt = f"""
-You are an assistant that rewrites faculty accomplishment notes
-into professional entries for a university accomplishment report.
+You are an assistant that writes professional faculty accomplishment reports
+for Southern Leyte State University.
 
-Your task is to improve the grammar, clarity, and professionalism
-of the input while preserving the original meaning.
+Your job is to rewrite the faculty's raw notes into concise,
+professional accomplishment statements.
 
-STRICT RULES:
+HISTORICAL ACCOMPLISHMENT REFERENCES:
+{reference_text}
 
-1. ALWAYS use past tense because the accomplishments describe
-   activities that have already been completed.
+IMPORTANT RULES:
 
-2. Do not use phrases such as:
-   - "The faculty member..."
-   - "The instructor..."
-   - "The professor..."
-   - "is currently discussing..."
-   - "is conducting..."
-   - "was responsible for..."
+1. Use the historical references ONLY as examples of writing style,
+   terminology, and phrasing.
 
-3. Start directly with the action performed.
-   Examples:
-   - Discussed...
-   - Conducted...
-   - Introduced...
-   - Facilitated...
-   - Explained...
-   - Presented...
-   - Continued...
+2. Do not copy historical activities as if they were performed
+   during the current reporting period.
 
-4. NEVER change the names of subjects or courses provided
-   in the input.
+3. Only describe activities explicitly mentioned in the CURRENT INPUT.
 
-   For example:
-   "Introduction to Computing" must remain "Introduction to Computing".
-   Do not rename it to "Computer Science", "Introductory Computer
-   Science", or any other similar course title.
+4. Always use past tense.
 
-5. Do not assume, add, or invent activities, outcomes, details,
-   or accomplishments that are not mentioned in the input.
+5. Start directly with the activity.
+   Examples: Discussed, Continued, Introduced, Conducted,
+   Facilitated, Explained, Presented, Prepared, Uploaded.
 
-6. Keep the output concise, natural, and appropriate for an
-   official faculty accomplishment report.
+6. Never start with:
+   "The faculty member..."
+   "The instructor..."
+   "The professor..."
+   "Currently..."
 
-7. Translate mixed-language input into professional English,
-   but preserve technical terms and official subject names.
+7. Preserve the official subject names provided in the input.
+   For example, "Introduction to Computing" must not be renamed
+   to "Computer Science."
 
-8. Do not add explanations, introductory statements, headings,
-   quotation marks, or commentary.
+8. Translate Bisaya, Taglish, or informal wording into professional
+   English while preserving the original meaning.
 
-9. Return ONLY the final accomplishment statement.
+9. Do not invent activities, student outcomes, or details.
 
-EXAMPLE:
+10. Return ONLY the accomplishment statement.
+    Do not include explanations, headings, or quotation marks.
+
+STYLE EXAMPLE:
 
 Input:
 nag continue sa pag discuss sa next topic which is ang linked list
 for data structure and algorithm nga subject, and introduce the
-number system and data representaion for introduction to computer
-subject.
+number system and data representaion for introduction to computer subject.
 
 Output:
 Continued the discussion on Linked Lists in Data Structures and
 Algorithms (DSA), and introduced Number Systems and Data
-Representation in Introduction to Computing, following the syllabus.
+Representation in Introduction to Computing.
 
-NOW REWRITE THIS INPUT:
-
+CURRENT INPUT:
 {request.text}
+
+FINAL ACCOMPLISHMENT:
 """
 
     try:
@@ -188,3 +336,160 @@ NOW REWRITE THIS INPUT:
             "Content-Disposition": 'attachment; filename="Accomplishment_Report.docx"'
         }
     )
+
+@app.post("/api/knowledge/upload")
+async def upload_report(file: UploadFile = File(...)):
+
+    # Only allow DOCX for now
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only DOCX files are supported."
+        )
+
+    file_bytes = await file.read()
+
+    # Limit upload size to 10 MB
+    if len(file_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="File exceeds the 10 MB limit."
+        )
+
+    if not file_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file is empty."
+        )
+
+    try:
+        extracted_text = extract_docx_text(file_bytes)
+
+        if not extracted_text.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="No readable text was found in the document."
+            )
+
+        # Create unique filename to prevent collisions
+        stored_filename = f"{uuid4().hex}.docx"
+        file_path = UPLOAD_DIR / stored_filename
+
+        # Save the original DOCX
+        file_path.write_bytes(file_bytes)
+
+        # Save extracted text into SQLite
+        with get_db() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO reports
+                (filename, stored_filename, extracted_text)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    file.filename,
+                    stored_filename,
+                    extracted_text
+                )
+            )
+
+            report_id = cursor.lastrowid
+
+        return {
+            "message": "Report uploaded successfully.",
+            "id": report_id,
+            "filename": file.filename,
+            "extracted_text": extracted_text
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process document: {str(e)}"
+        )
+    
+@app.get("/api/knowledge")
+def get_knowledge_reports():
+
+    with get_db() as conn:
+        reports = conn.execute(
+            """
+            SELECT id, filename, uploaded_at, extracted_text
+            FROM reports
+            ORDER BY uploaded_at DESC
+            """
+        ).fetchall()
+
+    return [
+        {
+            "id": report["id"],
+            "filename": report["filename"],
+            "uploaded_at": report["uploaded_at"],
+            "text_preview": report["extracted_text"][:300]
+        }
+        for report in reports
+    ]
+
+@app.get("/api/knowledge/{report_id}")
+def get_knowledge_report(report_id: int):
+
+    with get_db() as conn:
+        report = conn.execute(
+            """
+            SELECT *
+            FROM reports
+            WHERE id = ?
+            """,
+            (report_id,)
+        ).fetchone()
+
+    if not report:
+        raise HTTPException(
+            status_code=404,
+            detail="Report not found."
+        )
+
+    return {
+        "id": report["id"],
+        "filename": report["filename"],
+        "uploaded_at": report["uploaded_at"],
+        "extracted_text": report["extracted_text"]
+    }
+
+@app.delete("/api/knowledge/{report_id}")
+def delete_knowledge_report(report_id: int):
+
+    with get_db() as conn:
+        report = conn.execute(
+            """
+            SELECT stored_filename
+            FROM reports
+            WHERE id = ?
+            """,
+            (report_id,)
+        ).fetchone()
+
+        if not report:
+            raise HTTPException(
+                status_code=404,
+                detail="Report not found."
+            )
+
+        # Delete the uploaded file
+        file_path = UPLOAD_DIR / report["stored_filename"]
+
+        if file_path.exists():
+            file_path.unlink()
+
+        # Delete the database record
+        conn.execute(
+            "DELETE FROM reports WHERE id = ?",
+            (report_id,)
+        )
+
+    return {
+        "message": "Report deleted successfully."
+    }
