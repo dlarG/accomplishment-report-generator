@@ -1,15 +1,42 @@
-
 ```
 AI_Assisted_Accomplishment_Report_Generator
-├─ model
-│  └─ OllamaSetup.exe
+├─ README.md
 ├─ report-generator-backend
 │  ├─ app
+│  │  ├─ database
+│  │  │  ├─ connection.py
+│  │  │  ├─ knowledge_repository.py
+│  │  │  ├─ __init__.py
+│  │  │  └─ __pycache__
+│  │  │     ├─ connection.cpython-310.pyc
+│  │  │     └─ __init__.cpython-310.pyc
 │  │  ├─ main.py
-│  │  └─ __init__.py
+│  │  ├─ routers
+│  │  │  ├─ knowledge_routes.py
+│  │  │  ├─ report_routes.py
+│  │  │  └─ __init__.py
+│  │  ├─ schemas
+│  │  │  ├─ report_schema.py
+│  │  │  └─ __init__.py
+│  │  ├─ services
+│  │  │  ├─ document_service.py
+│  │  │  ├─ docx_service.py
+│  │  │  ├─ ollama_service.py
+│  │  │  ├─ retrieval_service.py
+│  │  │  └─ __init__.py
+│  │  ├─ templates
+│  │  │  └─ Monthly_Accomplishment_Report_Template.docx
+│  │  ├─ __init__.py
+│  │  └─ __pycache__
+│  │     ├─ main.cpython-310.pyc
+│  │     └─ __init__.cpython-310.pyc
 │  ├─ asdas
-│  ├─ requirements.txt
-│  └─ venv
+│  ├─ knowledge_base
+│  │  ├─ knowledge.db
+│  │  └─ uploads
+│  │     ├─ 11182f499fc6403da7c721907751442d.docx
+│  │     └─ 50ea7646e97a41df985e3a81d511a579.docx
+│  └─ requirements.txt
 └─ report-generator-frontend
    ├─ eslint.config.js
    ├─ index.html
@@ -20,14 +47,29 @@ AI_Assisted_Accomplishment_Report_Generator
    │  └─ icons.svg
    ├─ README.md
    ├─ src
+   │  ├─ api
+   │  │  ├─ client.js
+   │  │  ├─ knowledgeApi.js
+   │  │  └─ reportApi.js
    │  ├─ App.css
    │  ├─ App.jsx
    │  ├─ assets
    │  │  ├─ hero.png
    │  │  ├─ react.svg
    │  │  └─ vite.svg
+   │  ├─ components
+   │  │  ├─ AccomplishmentEntry.jsx
+   │  │  ├─ AccomplishmentList.jsx
+   │  │  ├─ KnowledgeList.jsx
+   │  │  ├─ KnowledgePreview.jsx
+   │  │  ├─ KnowledgeUpload.jsx
+   │  │  ├─ ReportInformation.jsx
+   │  │  └─ Sidebar.jsx
    │  ├─ index.css
-   │  └─ main.jsx
+   │  ├─ main.jsx
+   │  └─ pages
+   │     ├─ KnowledgeBasePage.jsx
+   │     └─ ReportGeneratorPage.jsx
    └─ vite.config.js
 
 ```
