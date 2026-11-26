@@ -11,7 +11,6 @@ from uuid import uuid4
 import re
 
 from fastapi import UploadFile, File
-
 from docx import Document
 from docx.shared import Pt
 
@@ -27,7 +26,7 @@ app.add_middleware(
 )
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "gemma3:1b"
+OLLAMA_MODEL = "qwen3.5:4b"
 
 # Knowledge Base storage
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -274,12 +273,14 @@ FINAL ACCOMPLISHMENT:
                 "messages": [
                     {"role": "user", "content": prompt}
                 ],
+                "think": False,
                 "stream": False,
                 "options": {
-                    "temperature": 0.2
+                    "temperature": 0.2,
+                    "num_predict": 150
                 }
             },
-            timeout=180
+            timeout=300
         )
 
         response.raise_for_status()
