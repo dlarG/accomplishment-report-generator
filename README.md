@@ -9,6 +9,7 @@ AI_Assisted_Accomplishment_Report_Generator
 │  │  │  ├─ __init__.py
 │  │  │  └─ __pycache__
 │  │  │     ├─ connection.cpython-310.pyc
+│  │  │     ├─ knowledge_repository.cpython-310.pyc
 │  │  │     └─ __init__.cpython-310.pyc
 │  │  ├─ main.py
 │  │  ├─ routers
@@ -23,7 +24,11 @@ AI_Assisted_Accomplishment_Report_Generator
 │  │  │  ├─ docx_service.py
 │  │  │  ├─ ollama_service.py
 │  │  │  ├─ retrieval_service.py
-│  │  │  └─ __init__.py
+│  │  │  ├─ __init__.py
+│  │  │  └─ __pycache__
+│  │  │     ├─ document_service.cpython-310.pyc
+│  │  │     ├─ retrieval_service.cpython-310.pyc
+│  │  │     └─ __init__.cpython-310.pyc
 │  │  ├─ templates
 │  │  │  └─ Monthly_Accomplishment_Report_Template.docx
 │  │  ├─ __init__.py

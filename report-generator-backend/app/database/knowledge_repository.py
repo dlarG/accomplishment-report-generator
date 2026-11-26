@@ -1,96 +1,97 @@
-from contextlib import closing
-from typing import Optional
+
+from pathlib import Path
 
 from app.database.connection import get_db, UPLOAD_DIR
 
 
-def insert_report(filename: str, stored_filename: str, extracted_text: str) -> int:
-    """Save a report record and return its new ID."""
-    with closing(get_db()) as conn:
-        with conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO reports (filename, stored_filename, extracted_text)
-                VALUES (?, ?, ?)
-                """,
-                (filename, stored_filename, extracted_text),
+def add_report(
+    filename: str,
+    stored_filename: str,
+    extracted_text: str
+) -> int:
+    """Save an uploaded report's information to the database."""
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO reports (
+                filename,
+                stored_filename,
+                extracted_text
             )
-            return cursor.lastrowid
+            VALUES (?, ?, ?)
+            """,
+            (filename, stored_filename, extracted_text)
+        )
+
+        return cursor.lastrowid
 
 
-def list_reports() -> list[dict]:
-    """Return all reports, newest first, with a short text preview."""
-    with closing(get_db()) as conn:
+def get_all_reports() -> list[dict]:
+    """Retrieve all reports, newest first."""
+
+    with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT id, filename, uploaded_at, extracted_text
+            SELECT id, filename, stored_filename, uploaded_at
             FROM reports
-            ORDER BY uploaded_at DESC
+            ORDER BY uploaded_at DESC, id DESC
             """
         ).fetchall()
 
-    return [
-        {
-            "id": row["id"],
-            "filename": row["filename"],
-            "uploaded_at": row["uploaded_at"],
-            "text_preview": row["extracted_text"][:300],
-        }
-        for row in rows
-    ]
+        return [dict(row) for row in rows]
 
 
-def get_report(report_id: int) -> Optional[dict]:
-    """Return one report with its full extracted text, or None if not found."""
-    with closing(get_db()) as conn:
+def get_report(report_id: int) -> dict | None:
+    """Retrieve one report, including its extracted text."""
+
+    with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM reports WHERE id = ?",
-            (report_id,),
+            """
+            SELECT *
+            FROM reports
+            WHERE id = ?
+            """,
+            (report_id,)
         ).fetchone()
 
-    if row is None:
-        return None
-
-    return {
-        "id": row["id"],
-        "filename": row["filename"],
-        "uploaded_at": row["uploaded_at"],
-        "extracted_text": row["extracted_text"],
-    }
-
-
-def get_all_report_texts() -> list[dict]:
-    """Return filename and full text of every report (used by retrieval)."""
-    with closing(get_db()) as conn:
-        rows = conn.execute(
-            "SELECT filename, extracted_text FROM reports"
-        ).fetchall()
-
-    return [
-        {"filename": row["filename"], "extracted_text": row["extracted_text"]}
-        for row in rows
-    ]
+        return dict(row) if row else None
 
 
 def delete_report(report_id: int) -> bool:
     """
-    Delete the stored DOCX file and the database record.
-    Returns True if deleted, False if the report does not exist.
+    Delete a report from the database and its associated
+    uploaded DOCX file.
+
+    Returns True if the report existed and was deleted.
     """
-    with closing(get_db()) as conn:
-        with conn:
-            row = conn.execute(
-                "SELECT stored_filename FROM reports WHERE id = ?",
-                (report_id,),
-            ).fetchone()
 
-            if row is None:
-                return False
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT stored_filename
+            FROM reports
+            WHERE id = ?
+            """,
+            (report_id,)
+        ).fetchone()
 
-            file_path = UPLOAD_DIR / row["stored_filename"]
-            if file_path.exists():
-                file_path.unlink()
+        if not row:
+            return False
 
-            conn.execute("DELETE FROM reports WHERE id = ?", (report_id,))
+        stored_filename = row["stored_filename"]
+
+        conn.execute(
+            "DELETE FROM reports WHERE id = ?",
+            (report_id,)
+        )
+
+    # Delete the physical file after the database transaction.
+    if stored_filename:
+        file_path = (UPLOAD_DIR / stored_filename).resolve()
+
+        # Prevent deleting files outside the uploads directory.
+        if file_path.parent == UPLOAD_DIR.resolve() and file_path.is_file():
+            file_path.unlink()
 
     return True
